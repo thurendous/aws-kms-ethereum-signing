@@ -7,53 +7,54 @@ import * as BN from 'bn.js';
 import { Transaction, TxData } from 'ethereumjs-tx';
 import { TransactionReceipt } from 'web3-core/types';
 
+import {config } from "dotenv"
+config()
+
+const keyId = process.env.KMS_KEY_ID
+const mumbaiRpcUrl = process.env.MUMBAI_RPC_URL
+
+console.log(keyId, mumbaiRpcUrl)    
+
+
+// make sure key exists:
+// console.log(process.env.ACCESS_KEY_ID,process.env.SECRET_ACCESS_KEY, process.env.KMS_KEY_ID)
+
+// initiate the instance of KMS
 const kms = new KMS({
-    accessKeyId: '<access_key_id>', // credentials for your IAM user with KMS access
-    secretAccessKey: '<access_secret>', // credentials for your IAM user with KMS access
-    region: 'us-east-1',
+    accessKeyId: process.env.ACCESS_KEY_ID,
+    secretAccessKey: process.env.SECRET_ACCESS_KEY,
+    region: 'ap-northeast-1',
     apiVersion: '2014-11-01',
 });
 
-const keyId = '<KMS key id>';
 
-const EcdsaSigAsnParse = asn1.define('EcdsaSig', function(this: any) {
-    // parsing this according to https://tools.ietf.org/html/rfc3279#section-2.2.3 
-    this.seq().obj( 
-        this.key('r').int(), 
-        this.key('s').int(),
-    );
-});
+// main function
+async function main() {
+    // error handling
+    if (!keyId) {
+        throw new Error('KMS_KEY_ID is not defined');
+    }
+    // アドレスチェック、作業の本体
+    let pubKey = await getPublicKey(keyId)
 
-const EcdsaPubKey = asn1.define('EcdsaPubKey', function(this: any) {
-    // parsing this according to https://tools.ietf.org/html/rfc5480#section-2
-    this.seq().obj( 
-        this.key('algo').seq().obj(
-            this.key('a').objid(),
-            this.key('b').objid(),
-        ),
-        this.key('pubKey').bitstr()
-    );
-});
-
-async function sign(msgHash, keyId) {
-    const params : KMS.SignRequest = {
-        // key id or 'Alias/<alias>'
-        KeyId: keyId, 
-        Message: msgHash, 
-        // 'ECDSA_SHA_256' is the one compatible with ECC_SECG_P256K1.
-        SigningAlgorithm: 'ECDSA_SHA_256',
-        MessageType: 'DIGEST' 
-    };
-    const res = await kms.sign(params).promise();
-    return res;
+    console.log(`buffer_key:`, pubKey.PublicKey) // get public key from KMS and turn it inot hex string
+    const ETHAddress = getEthereumAddress(pubKey.PublicKey as Buffer)
 }
 
+
+
+// ======================== other functions ==========================
+// run main function
+
+// get-public-key from KMS function
 async function getPublicKey(keyPairId: string) {
     return kms.getPublicKey({
         KeyId: keyPairId
-    }).promise();
+    }).promise(); // return promise
 }
 
+
+// イーサリアムのアドレスの生成
 function getEthereumAddress(publicKey: Buffer): string {
     console.log("Encoded Pub Key: " + publicKey.toString('hex'));
 
@@ -74,6 +75,33 @@ function getEthereumAddress(publicKey: Buffer): string {
     console.log("Generated Ethreum address: " + EthAddr);
     return EthAddr;
 }
+
+const EcdsaPubKey = asn1.define('EcdsaPubKey', function(this: any) {
+    // https://tools.ietf.org/html/rfc5480#section-2
+    this.seq().obj(
+        this.key('algo').seq().obj(
+            this.key('algorithm').objid(),
+            this.key('parameters').objid(),
+        ),
+        this.key('pubKey').bitstr() // <-- this is what we want
+    );
+});
+
+
+// 署名関数
+async function sign(msgHash, keyId) {
+    const params : KMS.SignRequest = {
+        // key id or 'Alias/<alias>'
+        KeyId: keyId, 
+        Message: msgHash,  // これが必要
+        // 'ECDSA_SHA_256' is the one compatible with ECC_SECG_P256K1.
+        SigningAlgorithm: 'ECDSA_SHA_256',
+        MessageType: 'DIGEST' 
+    };
+    const res = await kms.sign(params).promise(); // kms方法
+    return res;
+}
+
 
 async function findEthereumSig(plaintext) {
     let signature = await sign(plaintext, keyId);
@@ -108,6 +136,16 @@ async function findEthereumSig(plaintext) {
     return { r, s }
 }
 
+const EcdsaSigAsnParse = asn1.define('EcdsaSig', function(this: any) {
+    // parsing this according to https://tools.ietf.org/html/rfc3279#section-2.2.3 
+    this.seq().obj( 
+        this.key('r').int(), 
+        this.key('s').int(),
+    );
+});
+
+
+// ecrecover関数
 function recoverPubKeyFromSig(msg: Buffer, r : BN, s : BN, v: number) {
     console.log("Recovering public key with msg " + msg.toString('hex') + " r: " + r.toString(16) + " s: " + s.toString(16));
     let rBuffer = r.toBuffer();
@@ -119,6 +157,7 @@ function recoverPubKeyFromSig(msg: Buffer, r : BN, s : BN, v: number) {
     return RecoveredEthAddr;
 }
 
+// 
 function findRightKey(msg: Buffer, r : BN, s: BN, expectedEthAddr: string) {
     // This is the wrapper function to find the right v value
     // There are two matching signatues on the elliptic curve
@@ -136,9 +175,10 @@ function findRightKey(msg: Buffer, r : BN, s: BN, expectedEthAddr: string) {
     return { pubKey, v };
 }
 
-txTest();
+
+// txTest()
 async function txTest() {
-    const web3 = new Web3(new Web3.providers.HttpProvider("https://kovan.infura.io/v3/<infura_key>"));
+    const web3 = new Web3(new Web3.providers.HttpProvider(mumbaiRpcUrl));
 
     let pubKey = await getPublicKey(keyId);
     let ethAddr = getEthereumAddress((pubKey.PublicKey as Buffer));
@@ -161,7 +201,7 @@ async function txTest() {
     console.log(txParams);
 
     const tx = new Transaction(txParams, {
-        chain: 'kovan',
+        chain: 'mumbai',
     });
 
     let txHash = tx.hash(false);
@@ -181,3 +221,6 @@ async function txTest() {
     })  
     .on('error', error => console.log(error));
 }
+
+txTest()
+// main()

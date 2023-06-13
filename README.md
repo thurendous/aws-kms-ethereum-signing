@@ -1,3 +1,19 @@
+# how to use
+
+- Install the packages:
+```
+npm i
+```
+- run the script:
+```
+ts-node main.ts
+```
+
+
+
+
+
+# By the original author
 # AWS KMS based Ethereum Tx Signing
 This repo shows how to sign an Ethereum transaction using AWS KMS. 
 
